@@ -18,3 +18,12 @@ Content-Type: application/json
 }
 
 ###
+
+POST {{Publisher_HostAddress}}/orders/11111111-1111-1111-1111-111111111111/cancel
+Content-Type: application/json
+
+{
+  "reason": "cliente desistiu"
+}
+
+###

@@ -8,11 +8,13 @@ var rabbitMq = builder.Configuration.GetSection("RabbitMq").Get<RabbitMqSettings
 
 builder.Services.AddSingleton<ReceivedOrderLog>();
 builder.Services.AddSingleton<ReceivedShipmentLog>();
+builder.Services.AddSingleton<ReceivedCancellationLog>();
 
 builder.Services.AddMassTransit(bus =>
 {
     bus.AddConsumer<OrderSubmittedConsumer>();
     bus.AddConsumer<OrderShippedConsumer>();
+    bus.AddConsumer<OrderCancelledConsumer>();
     bus.SetKebabCaseEndpointNameFormatter();
 
     bus.UsingRabbitMq((context, cfg) =>

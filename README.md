@@ -16,6 +16,18 @@ O `Publisher` só publica. Ele não declara fila. O `Consumer` declara uma fila 
 
 O projeto `Contracts` declara `OrderShipped`. `Publisher` e `Consumer` referenciam esse projeto, então os dois usam o mesmo tipo em vez de copiar o contrato. O consumer recebe o evento na fila `order-shipped`.
 
+## OrderCancelled, namespaces diferentes
+
+`Publisher/Contracts/OrderCancelled.cs` declara o tipo em `namespace Publisher.Contracts`. `Consumer/Contracts/OrderCancelled.cs` declara outro, em `namespace Consumer.Contracts`. As propriedades têm os mesmos nomes. Os dois arquivos repetem a mesma identidade explícita:
+
+```csharp
+[EntityName("Contracts:OrderCancelled")]
+[MessageUrn("Contracts:OrderCancelled")]
+public record OrderCancelled
+```
+
+`EntityName` faz os dois lados usarem o exchange `Contracts:OrderCancelled`. `MessageUrn` gera o identificador `urn:message:Contracts:OrderCancelled` no envelope e no `Consume`. O namespace de cada serviço deixa de entrar na rota porque o texto dos atributos é o mesmo nos dois contratos.
+
 ## Como a configuração do MassTransit liga os dois
 
 Os dois processos falam com o mesmo broker. A seção `RabbitMq` do `appsettings.json` (no host) ou as variáveis `RabbitMq__*` (no Compose) alimentam `cfg.Host` dentro de `AddMassTransit`. Host, virtual host, usuário e senha precisam apontar para o mesmo RabbitMQ. O publisher não precisa saber o endereço do consumer.
@@ -38,7 +50,7 @@ builder.Services.AddMassTransit(bus =>
 });
 ```
 
-`Publisher/Api.cs` recebe `IPublishEndpoint` nos endpoints HTTP. `Publish` envia a mensagem para um exchange cujo nome o MassTransit deriva do tipo: o namespace mais o nome da classe. `OrderSubmitted` vai para o exchange de `Contracts.OrderSubmitted`. `OrderShipped` vai para o exchange de `Contracts.OrderShipped`. Quem publica não escolhe a fila.
+`Publisher/Api.cs` recebe `IPublishEndpoint` nos endpoints HTTP. `Publish` envia a mensagem para um exchange cujo nome o MassTransit deriva do tipo: o namespace mais o nome da classe. `OrderSubmitted` vai para o exchange de `Contracts.OrderSubmitted`. `OrderShipped` vai para o exchange de `Contracts.OrderShipped`. `OrderCancelled` usa o nome do atributo `EntityName`, `Contracts:OrderCancelled`. Quem publica não escolhe a fila.
 
 ### Consumer
 
@@ -49,6 +61,7 @@ builder.Services.AddMassTransit(bus =>
 {
     bus.AddConsumer<OrderSubmittedConsumer>();
     bus.AddConsumer<OrderShippedConsumer>();
+    bus.AddConsumer<OrderCancelledConsumer>();
     bus.SetKebabCaseEndpointNameFormatter();
 
     bus.UsingRabbitMq((context, cfg) =>
@@ -64,9 +77,9 @@ builder.Services.AddMassTransit(bus =>
 });
 ```
 
-`AddConsumer` associa a classe ao tipo da mensagem: `OrderSubmittedConsumer` implementa `IConsumer<OrderSubmitted>` e `OrderShippedConsumer` implementa `IConsumer<OrderShipped>`. `SetKebabCaseEndpointNameFormatter` transforma o nome da classe em fila: `order-submitted` e `order-shipped`. `ConfigureEndpoints` declara cada fila no RabbitMQ e cria o binding com o exchange do tipo consumido.
+`AddConsumer` associa a classe ao tipo da mensagem. `SetKebabCaseEndpointNameFormatter` transforma o nome da classe em fila: `order-submitted`, `order-shipped` e `order-cancelled`. `ConfigureEndpoints` declara cada fila no RabbitMQ e cria o binding com o exchange do tipo consumido.
 
-Quando uma mensagem chega, o MassTransit desserializa o corpo para o tipo do consumer e chama `Consume`. O `GET /orders` e o `GET /shipments` só leem o que esses métodos já gravaram em memória.
+Quando uma mensagem chega, o MassTransit desserializa o corpo para o tipo do consumer e chama `Consume`. O `GET /orders`, o `GET /shipments` e o `GET /cancellations` só leem o que esses métodos já gravaram em memória.
 
 ### O que precisa coincidir
 
@@ -76,7 +89,7 @@ A fila só recebe a mensagem quando o tipo publicado e o tipo consumido geram o 
 
 `OrderShipped` está só em `Contracts/OrderShipped.cs`. A referência de projeto faz os dois serviços compilarem contra o mesmo tipo, então namespace, nome e propriedades já são os mesmos.
 
-Se o namespace ou o nome do tipo divergir, o publisher grava em um exchange e o consumer escuta outro. A fila fica vazia e o `Consume` não roda. Por isso o consumer sobe antes do publisher: ele precisa criar a fila e o binding antes da primeira publicação. Sem fila ligada ao exchange, o RabbitMQ descarta a mensagem.
+Se o namespace ou o nome do tipo divergir e não houver `EntityName` e `MessageUrn` iguais nos dois lados, o publisher grava em um exchange e o consumer escuta outro. A fila fica vazia e o `Consume` não roda. `OrderCancelled` é o exemplo em que os namespaces divergem de propósito e os atributos fixam a identidade em `Contracts:OrderCancelled`. Por isso o consumer sobe antes do publisher: ele precisa criar a fila e o binding antes da primeira publicação. Sem fila ligada ao exchange, o RabbitMQ descarta a mensagem.
 
 ## Pré-requisito
 
@@ -93,7 +106,7 @@ docker compose up -d --build
 O Compose sobe os três serviços nesta ordem:
 
 1. `rabbitmq` fica saudável.
-2. `consumer` sobe, cria as filas `order-submitted` e `order-shipped`, e só então o healthcheck dele passa.
+2. `consumer` sobe, cria as filas `order-submitted`, `order-shipped` e `order-cancelled`, e só então o healthcheck dele passa.
 3. `publisher` sobe depois do consumer.
 
 Dentro da rede do Compose, `RabbitMq__Host` dos dois projetos aponta para o serviço `rabbitmq`. No host, as portas publicadas são:
@@ -132,7 +145,14 @@ Invoke-RestMethod -Method Post -Uri http://localhost:5015/orders/11111111-1111-1
 Invoke-RestMethod http://localhost:5193/shipments
 ```
 
-No painel do RabbitMQ (`http://localhost:15672`, usuário `lab`, senha `lab`), as filas `order-submitted` e `order-shipped` aparecem em Queues. O log do consumer mostra as duas linhas, a do pedido recebido e a do rastreio.
+Publique o cancelamento. Os dois contratos estão em namespaces diferentes e compartilham o exchange `Contracts:OrderCancelled`:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:5015/orders/11111111-1111-1111-1111-111111111111/cancel -ContentType "application/json" -Body '{"reason":"cliente desistiu"}'
+Invoke-RestMethod http://localhost:5193/cancellations
+```
+
+No painel do RabbitMQ (`http://localhost:15672`, usuário `lab`, senha `lab`), as filas `order-submitted`, `order-shipped` e `order-cancelled` aparecem em Queues. O log do consumer mostra o pedido recebido, o rastreio e o cancelamento.
 
 Para acompanhar o consumo:
 

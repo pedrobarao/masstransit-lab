@@ -1,5 +1,6 @@
 using Contracts;
 using MassTransit;
+using Publisher.Contracts;
 
 namespace Publisher;
 
@@ -46,6 +47,24 @@ public static class Api
                 return Results.Accepted($"/orders/{orderId}", message);
             });
 
+        app.MapPost("/orders/{orderId:guid}/cancel",
+            async (Guid orderId, CancelOrderRequest request, IPublishEndpoint publishEndpoint) =>
+            {
+                if (string.IsNullOrWhiteSpace(request.Reason))
+                    return Results.BadRequest(new { error = "Reason é obrigatório." });
+
+                var message = new OrderCancelled
+                {
+                    OrderId = orderId,
+                    Reason = request.Reason.Trim(),
+                    CancelledAt = DateTimeOffset.UtcNow
+                };
+
+                await publishEndpoint.Publish(message);
+
+                return Results.Accepted($"/orders/{orderId}", message);
+            });
+
         return app;
     }
 }
@@ -53,3 +72,5 @@ public static class Api
 internal record SubmitOrderRequest(string Customer, decimal Amount);
 
 internal record ShipOrderRequest(string TrackingCode);
+
+internal record CancelOrderRequest(string Reason);

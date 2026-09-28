@@ -6,6 +6,7 @@ public static class Api
     {
         app.MapGet("/orders", (ReceivedOrderLog log) => log.All);
         app.MapGet("/shipments", (ReceivedShipmentLog log) => log.All);
+        app.MapGet("/cancellations", (ReceivedCancellationLog log) => log.All);
         return app;
     }
 }
