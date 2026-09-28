@@ -21,34 +21,13 @@ var app = builder.Build();
 
 app.UseHttpsRedirection();
 
-app.MapPost("/orders", async (SubmitOrderRequest request, IPublishEndpoint publishEndpoint) =>
-{
-    if (string.IsNullOrWhiteSpace(request.Customer))
-        return Results.BadRequest(new { error = "Customer é obrigatório." });
-
-    if (request.Amount <= 0)
-        return Results.BadRequest(new { error = "Amount deve ser maior que zero." });
-
-    var message = new OrderSubmitted
-    {
-        OrderId = Guid.NewGuid(),
-        Customer = request.Customer.Trim(),
-        Amount = request.Amount,
-        SubmittedAt = DateTimeOffset.UtcNow
-    };
-
-    await publishEndpoint.Publish(message);
-
-    return Results.Accepted($"/orders/{message.OrderId}", message);
-});
+app.MapApi();
 
 app.Run();
 
 namespace Publisher
 {
-    record SubmitOrderRequest(string Customer, decimal Amount);
-
-    sealed class RabbitMqSettings
+    internal sealed class RabbitMqSettings
     {
         public string Host { get; init; } = "localhost";
         public string VirtualHost { get; init; } = "/";

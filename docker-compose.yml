@@ -16,7 +16,8 @@ services:
 
   consumer:
     build:
-      context: ./Consumer
+      context: .
+      dockerfile: Consumer/Dockerfile
     ports:
       - "5193:8080"
     environment:
@@ -36,7 +37,8 @@ services:
 
   publisher:
     build:
-      context: ./Publisher
+      context: .
+      dockerfile: Publisher/Dockerfile
     ports:
       - "5015:8080"
     environment:

@@ -1,4 +1,5 @@
 using Consumer;
+using Consumer.Consumers;
 using MassTransit;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -6,10 +7,12 @@ var builder = WebApplication.CreateBuilder(args);
 var rabbitMq = builder.Configuration.GetSection("RabbitMq").Get<RabbitMqSettings>() ?? new RabbitMqSettings();
 
 builder.Services.AddSingleton<ReceivedOrderLog>();
+builder.Services.AddSingleton<ReceivedShipmentLog>();
 
 builder.Services.AddMassTransit(bus =>
 {
     bus.AddConsumer<OrderSubmittedConsumer>();
+    bus.AddConsumer<OrderShippedConsumer>();
     bus.SetKebabCaseEndpointNameFormatter();
 
     bus.UsingRabbitMq((context, cfg) =>
@@ -28,13 +31,13 @@ var app = builder.Build();
 
 app.UseHttpsRedirection();
 
-app.MapGet("/orders", (ReceivedOrderLog log) => log.All);
+app.MapApi();
 
 app.Run();
 
 namespace Consumer
 {
-    sealed class RabbitMqSettings
+    internal sealed class RabbitMqSettings
     {
         public string Host { get; init; } = "localhost";
         public string VirtualHost { get; init; } = "/";

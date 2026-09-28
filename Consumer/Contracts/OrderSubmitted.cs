@@ -1,4 +1,4 @@
-namespace Consumer;
+namespace Contracts;
 
 public record OrderSubmitted
 {

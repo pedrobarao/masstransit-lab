@@ -1,18 +1,82 @@
 # masstransit-lab
 
-Dois processos separados, o `Publisher` e o `Consumer`, publicam e consomem a mesma mensagem pelo RabbitMQ. Cada um sobe no próprio host e não referencia o projeto do outro.
+Dois processos separados, o `Publisher` e o `Consumer`, publicam e consomem mensagens pelo RabbitMQ. Cada um sobe no próprio host. Os dois não se referenciam; só conhecem o broker.
 
-O `Publisher` só publica. Ele não declara fila. O `Consumer` declara a fila `order-submitted` e a ligação com o exchange da mensagem. Os dois só precisam conhecer o broker, não o endereço um do outro.
+O `Publisher` só publica. Ele não declara fila. O `Consumer` declara uma fila por evento e a ligação com o exchange da mensagem.
 
-## Contrato definido nos dois serviços
+## OrderSubmitted, definido nos dois serviços
 
-`Publisher` e `Consumer` não referenciam o mesmo assembly. Cada um declara o próprio `OrderSubmitted`. O MassTransit identifica a mensagem pelo namespace e pelo nome do tipo (`MassTransitLab.Contracts.OrderSubmitted`), então as duas declarações precisam coincidir:
+`Publisher` e `Consumer` não compartilham o assembly desse evento. Cada um declara o próprio `OrderSubmitted`. O MassTransit identifica a mensagem pelo namespace e pelo nome do tipo (`Contracts.OrderSubmitted`), então as duas declarações precisam coincidir:
 
 - o mesmo namespace
 - o mesmo nome do tipo
 - as mesmas propriedades, com os mesmos nomes
 
-O projeto `Contracts` guarda uma cópia dessa forma para consulta. Nenhum dos dois serviços o referencia.
+## OrderShipped, projeto compartilhado
+
+O projeto `Contracts` declara `OrderShipped`. `Publisher` e `Consumer` referenciam esse projeto, então os dois usam o mesmo tipo em vez de copiar o contrato. O consumer recebe o evento na fila `order-shipped`.
+
+## Como a configuração do MassTransit liga os dois
+
+Os dois processos falam com o mesmo broker. A seção `RabbitMq` do `appsettings.json` (no host) ou as variáveis `RabbitMq__*` (no Compose) alimentam `cfg.Host` dentro de `AddMassTransit`. Host, virtual host, usuário e senha precisam apontar para o mesmo RabbitMQ. O publisher não precisa saber o endereço do consumer.
+
+### Publisher
+
+`Publisher/Program.cs` registra o barramento e escolhe o transporte RabbitMQ. Não há `AddConsumer` nem `ConfigureEndpoints`, então esse processo não cria fila.
+
+```csharp
+builder.Services.AddMassTransit(bus =>
+{
+    bus.UsingRabbitMq((_, cfg) =>
+    {
+        cfg.Host(rabbitMq.Host, rabbitMq.VirtualHost, host =>
+        {
+            host.Username(rabbitMq.Username);
+            host.Password(rabbitMq.Password);
+        });
+    });
+});
+```
+
+`Publisher/Api.cs` recebe `IPublishEndpoint` nos endpoints HTTP. `Publish` envia a mensagem para um exchange cujo nome o MassTransit deriva do tipo: o namespace mais o nome da classe. `OrderSubmitted` vai para o exchange de `Contracts.OrderSubmitted`. `OrderShipped` vai para o exchange de `Contracts.OrderShipped`. Quem publica não escolhe a fila.
+
+### Consumer
+
+`Consumer/Program.cs` registra um consumer por evento, define o formato do nome da fila e manda o MassTransit criar os endpoints a partir desses registros.
+
+```csharp
+builder.Services.AddMassTransit(bus =>
+{
+    bus.AddConsumer<OrderSubmittedConsumer>();
+    bus.AddConsumer<OrderShippedConsumer>();
+    bus.SetKebabCaseEndpointNameFormatter();
+
+    bus.UsingRabbitMq((context, cfg) =>
+    {
+        cfg.Host(rabbitMq.Host, rabbitMq.VirtualHost, host =>
+        {
+            host.Username(rabbitMq.Username);
+            host.Password(rabbitMq.Password);
+        });
+
+        cfg.ConfigureEndpoints(context);
+    });
+});
+```
+
+`AddConsumer` associa a classe ao tipo da mensagem: `OrderSubmittedConsumer` implementa `IConsumer<OrderSubmitted>` e `OrderShippedConsumer` implementa `IConsumer<OrderShipped>`. `SetKebabCaseEndpointNameFormatter` transforma o nome da classe em fila: `order-submitted` e `order-shipped`. `ConfigureEndpoints` declara cada fila no RabbitMQ e cria o binding com o exchange do tipo consumido.
+
+Quando uma mensagem chega, o MassTransit desserializa o corpo para o tipo do consumer e chama `Consume`. O `GET /orders` e o `GET /shipments` só leem o que esses métodos já gravaram em memória.
+
+### O que precisa coincidir
+
+A fila só recebe a mensagem quando o tipo publicado e o tipo consumido geram o mesmo exchange.
+
+`OrderSubmitted` está copiado em `Publisher/Contracts/OrderSubmitted.cs` e `Consumer/Contracts/OrderSubmitted.cs`. Os arquivos são independentes. Os dois usam `namespace Contracts` e o nome `OrderSubmitted`, com as mesmas propriedades. O assembly de cada serviço fica de fora dessa identidade.
+
+`OrderShipped` está só em `Contracts/OrderShipped.cs`. A referência de projeto faz os dois serviços compilarem contra o mesmo tipo, então namespace, nome e propriedades já são os mesmos.
+
+Se o namespace ou o nome do tipo divergir, o publisher grava em um exchange e o consumer escuta outro. A fila fica vazia e o `Consume` não roda. Por isso o consumer sobe antes do publisher: ele precisa criar a fila e o binding antes da primeira publicação. Sem fila ligada ao exchange, o RabbitMQ descarta a mensagem.
 
 ## Pré-requisito
 
@@ -29,7 +93,7 @@ docker compose up -d --build
 O Compose sobe os três serviços nesta ordem:
 
 1. `rabbitmq` fica saudável.
-2. `consumer` sobe, cria a fila `order-submitted` e só então o healthcheck dele passa.
+2. `consumer` sobe, cria as filas `order-submitted` e `order-shipped`, e só então o healthcheck dele passa.
 3. `publisher` sobe depois do consumer.
 
 Dentro da rede do Compose, `RabbitMq__Host` dos dois projetos aponta para o serviço `rabbitmq`. No host, as portas publicadas são:
@@ -61,7 +125,14 @@ Invoke-RestMethod http://localhost:5193/orders
 
 A resposta do `POST` e o item retornado pelo `GET` trazem o mesmo `orderId`.
 
-No painel do RabbitMQ (`http://localhost:15672`, usuário `lab`, senha `lab`), a fila `order-submitted` aparece em Queues. O exchange da mensagem aparece em Exchanges com o nome derivado de `MassTransitLab.Contracts.OrderSubmitted`.
+Publique o envio do mesmo pedido. Esse evento vem do projeto `Contracts`:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:5015/orders/11111111-1111-1111-1111-111111111111/ship -ContentType "application/json" -Body '{"trackingCode":"BR123456789"}'
+Invoke-RestMethod http://localhost:5193/shipments
+```
+
+No painel do RabbitMQ (`http://localhost:15672`, usuário `lab`, senha `lab`), as filas `order-submitted` e `order-shipped` aparecem em Queues. O log do consumer mostra as duas linhas, a do pedido recebido e a do rastreio.
 
 Para acompanhar o consumo:
 

@@ -4,3 +4,8 @@ GET {{Consumer_HostAddress}}/orders
 Accept: application/json
 
 ###
+
+GET {{Consumer_HostAddress}}/shipments
+Accept: application/json
+
+###

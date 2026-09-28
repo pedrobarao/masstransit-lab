@@ -1,4 +1,4 @@
-namespace Publisher;
+namespace Contracts;
 
 public record OrderSubmitted
 {

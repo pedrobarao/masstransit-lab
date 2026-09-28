@@ -1,6 +1,7 @@
+using Contracts;
 using MassTransit;
 
-namespace Consumer;
+namespace Consumer.Consumers;
 
 public sealed class OrderSubmittedConsumer(ILogger<OrderSubmittedConsumer> logger, ReceivedOrderLog log)
     : IConsumer<OrderSubmitted>
