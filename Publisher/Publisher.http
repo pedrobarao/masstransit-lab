@@ -1,0 +1,11 @@
+@Publisher_HostAddress = http://localhost:5015
+
+POST {{Publisher_HostAddress}}/orders
+Content-Type: application/json
+
+{
+  "customer": "Ada Lovelace",
+  "amount": 42.50
+}
+
+###

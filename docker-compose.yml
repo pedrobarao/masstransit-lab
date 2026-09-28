@@ -1,0 +1,51 @@
+services:
+  rabbitmq:
+    image: rabbitmq:4-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: lab
+      RABBITMQ_DEFAULT_PASS: lab
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 5s
+      timeout: 10s
+      retries: 12
+      start_period: 10s
+
+  consumer:
+    build:
+      context: ./Consumer
+    ports:
+      - "5193:8080"
+    environment:
+      RabbitMq__Host: rabbitmq
+      RabbitMq__VirtualHost: /
+      RabbitMq__Username: lab
+      RabbitMq__Password: lab
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/8080'"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  publisher:
+    build:
+      context: ./Publisher
+    ports:
+      - "5015:8080"
+    environment:
+      RabbitMq__Host: rabbitmq
+      RabbitMq__VirtualHost: /
+      RabbitMq__Username: lab
+      RabbitMq__Password: lab
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      consumer:
+        condition: service_healthy
